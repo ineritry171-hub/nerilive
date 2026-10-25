@@ -1,13 +1,8 @@
 {
-  "name": "neri-live",
-  "version": "2.0.0",
-  "private": true,
-  "description": "Compartilhamento de tela com WebRTC e salas privadas",
-  "engines": {
-    "node": ">=18"
-  },
-  "scripts": {
-    "start": "node server.js",
-    "test": "node --test tests/*.test.js"
-  }
+  "name":"neri-live-duo",
+  "version":"3.0.0",
+  "private":true,
+  "description":"NERI LIVE: duas transmissões simultâneas via WebRTC",
+  "engines":{"node":">=18"},
+  "scripts":{"start":"node server.js","test":"node --test tests/*.test.js"}
 }

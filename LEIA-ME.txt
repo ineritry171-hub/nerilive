@@ -1,56 +1,12 @@
-NERI LIVE V2 — TRANSMITIR PARA AMIGO FORA DE CASA
-===============================================
+NERI LIVE DUO V3
+================
+AGORA OS DOIS PODEM COMPARTILHAR E ASSISTIR NA MESMA SALA.
 
-ESTA VERSÃO PODE SER HOSPEDADA NO RENDER (HTTPS).
-Para fora da rede, o link localhost NAO funciona.
+1. EXTRAIA O ZIP
+2. NO GITHUB: atualize os arquivos do projeto antigo
+3. NA PASTA public: atualize index.html, app.js, style.css e favicon.svg
+4. AGUARDE O DEPLOY DO RENDER
+5. CRIE UMA SALA NOVA e envie o link para seu amigo
+6. CADA UM clica em Iniciar minha transmissão quando quiser
 
-PASSO A PASSO (GRATUITO PARA TESTES)
-1. Acesse https://github.com e crie um repositório novo, por exemplo neri-live.
-2. Envie TODOS os arquivos desta pasta para a RAIZ do repositório:
-   server.js, package.json, render.yaml e a pasta public, etc.
-   Importante: server.js e package.json precisam aparecer na raiz do GitHub.
-3. Acesse https://dashboard.render.com/ -> New -> Web Service.
-4. Conecte o repositório do GitHub criado no passo 1.
-5. Configuração:
-     Language: Node
-     Build Command: npm install
-     Start Command: npm start
-     Instance Type: Free (se estiver disponível)
-6. Crie o serviço. O Render fornecerá um link HTTPS terminando em onrender.com.
-7. Abra esse link no SEU navegador, clique em CRIAR SALA.
-8. Entre no estúdio, selecione qualidade e clique em INICIAR TRANSMISSÃO.
-9. Clique COPIAR LINK e mande só o link /watch/priv-... para seu amigo.
-10. Seu amigo abre o link no navegador: não instala nada.
-
-USO APENAS NO SEU PC (TESTES LOCAIS)
-- Instale Node.js LTS: https://nodejs.org
-- Abra ABRIR_NO_WINDOWS.bat e acesse http://localhost:4747
-- Não copie link localhost para amigos fora da mesma máquina.
-
-QUALIDADE, ESTABILIDADE E LIMITAÇÕES
-- WebRTC: a tela é enviada diretamente entre os navegadores (P2P),
-  sempre que as redes permitirem conexão. O Render não retransmite o vídeo.
-- Escolha 720p/30 para começar; tente 1080p/60 se o PC e o upload suportarem.
-- 1080p/60 sugere cerca de 8,5 Mbps de UPLOAD POR ESPECTADOR.
-- 720p/30 sugere cerca de 3,5 Mbps de upload por espectador.
-- Som do computador depende do Chrome/Edge e do tipo de tela/aba escolhido.
-- Redes com NAT rigoroso podem impedir a conexão: nesse caso é preciso TURN.
-  Configure a variável ICE_SERVERS_JSON no Render com STUN + TURN autenticado.
-- O Render gratuito pode hibernar depois de inatividade e levar algum
-  tempo para acordar. O app envia presença enquanto a sala está conectada.
-- Reiniciar o serviço apaga salas existentes, pois são guardadas na memória.
-- Este app NÃO hospeda vídeo gravado. Não compartilhe o link de estúdio #key=.
-- A sala permite até oito espectadores, mas 1080p/60 é exigente em P2P.
-
-IMPORTANTE: TÚNEL CLOUDFLARE RÁPIDO NAO É COMPATÍVEL COM A V1/V2
-Esta base usa Server-Sent Events (SSE) na sinalização. Os Quick Tunnels
-trycloudflare.com não suportam SSE. Por isso usamos o Render, que suporta SSE.
-
-DIAGNÓSTICO
-- Vídeo não conecta entre redes diferentes: tente STUN/TURN e verifique NAT.
-- Link inválido: reabra a página do Render, crie nova sala e copie link.
-- Tela preta: confira permissão de compartilhamento e console do navegador.
-- Sem áudio: compartilhe uma aba com opção de áudio habilitada.
-
-Arquivos: server.js (servidor), public/ (app), package.json (Node),
-render.yaml (configuração do Render), tests/ (testes locais).
+Leia README.md para detalhes.
