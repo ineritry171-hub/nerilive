@@ -3,7 +3,7 @@
   const $ = id => document.getElementById(id);
   const path = location.pathname.split('/').filter(Boolean);
   const roomId = path[1] || '';
-  const state = {id:null,token:null,name:'',stream:null,remoteStream:null,localLive:false,remoteLive:false,remoteId:null,pc:null,sse:null,ice:[],pendingIce:[],remoteHasDescription:false,makingOffer:false,connecting:false,config:{iceServers:[{urls:'stun:stun.l.google.com:19302'}]},senders:null,quality:{height:1080,fps:60,bitrate:8500}};
+  const state = {id:null,token:null,name:'',stream:null,remoteStream:null,localLive:false,remoteLive:false,remoteId:null,pc:null,sse:null,ice:[],pendingIce:[],remoteHasDescription:false,makingOffer:false,connecting:false,polite:false,ignoreOffer:false,isSettingRemoteAnswerPending:false,needsNegotiation:false,iceRetries:0,iceRetryTimer:null,config:{iceServers:[{urls:'stun:stun.l.google.com:19302'}]},senders:null,quality:{height:1080,fps:60,bitrate:8500}};
   let toastTimer, statsTimer;
   function show(id,on){$(id).classList.toggle('hidden',!on);}
   function text(id,str){$(id).textContent=str;}
@@ -22,7 +22,8 @@
   function updateRemote(){
     if(!state.remoteId){presentRemote(false);remoteWaiting('Aguardando seu amigo','Envie o link da sala para ele entrar.');return;}
     if(!state.remoteLive){presentRemote(false);remoteWaiting('Amigo conectado','Ele ainda não iniciou a transmissão.');return;}
-    if(!$('remoteVideo').srcObject){presentRemote(false);remoteWaiting('Conectando ao vídeo...','Tentando estabelecer conexão entre vocês.');return;}
+    const track=$('remoteVideo').srcObject?.getVideoTracks()[0];
+    if(!track||track.muted||track.readyState!=='live'){presentRemote(false);remoteWaiting('Conectando ao vídeo...','Se não aparecer, clique em Reconectar vídeo. Se persistir, pode ser necessário TURN.');return;}
     presentRemote(true);text('remoteTag','AO VIVO');text('remoteHint','Transmitindo para você');
   }
   async function copyLink(){try{await navigator.clipboard.writeText(invite());toast('Link da sala copiado!');}catch{$('roomLink').focus();$('roomLink').select();toast('Copie o link selecionado.');}}
@@ -31,17 +32,18 @@
   async function applyBitrate(){if(!state.senders?.video)return;try{const sender=state.senders.video;const params=sender.getParameters();if(!params.encodings?.length)params.encodings=[{}];params.encodings[0].maxBitrate=state.quality.bitrate*1000;params.encodings[0].maxFramerate=state.quality.fps;params.degradationPreference='maintain-framerate';await sender.setParameters(params);}catch(e){console.info('Bitrate controlado pelo navegador:',e.message);}}
 
   function endPeer(){
+    clearTimeout(state.iceRetryTimer);state.iceRetryTimer=null;
     if(state.pc){try{state.pc.onicecandidate=null;state.pc.ontrack=null;state.pc.onconnectionstatechange=null;state.pc.close();}catch{}state.pc=null;}
-    state.senders=null;state.pendingIce=[];state.remoteHasDescription=false;state.makingOffer=false;state.connecting=false;
+    state.senders=null;state.pendingIce=[];state.remoteHasDescription=false;state.makingOffer=false;state.connecting=false;state.ignoreOffer=false;state.isSettingRemoteAnswerPending=false;state.needsNegotiation=false;state.iceRetries=0;
     state.remoteStream=null;$('remoteVideo').srcObject=null;presentRemote(false);
   }
-  async function addIce(candidate){if(!state.pc){state.pendingIce.push(candidate);return;}if(!state.pc.remoteDescription){state.pendingIce.push(candidate);return;}try{await state.pc.addIceCandidate(candidate);}catch(e){console.warn('ICE:',e.message);}}
+  async function addIce(candidate){if(!state.pc){state.pendingIce.push(candidate);return;}if(!state.pc.remoteDescription){state.pendingIce.push(candidate);return;}try{await state.pc.addIceCandidate(candidate);}catch(e){if(!state.ignoreOffer)console.warn('ICE:',e.message);}}
   async function flushIce(){const all=state.pendingIce.splice(0);for(const candidate of all)await addIce(candidate);}
   function ensurePeer(){
     if(!state.remoteId || state.pc)return;
+    // Perfect Negotiation: os dois podem oferecer mídia sem disputar o SDP.
+    state.polite=state.id>state.remoteId;
     const pc=new RTCPeerConnection({iceServers:state.config.iceServers||[]});state.pc=pc;
-    // Reserve um canal de vídeo e de áudio em ambos os sentidos desde o início.
-    // replaceTrack ativa/desativa a tela mais tarde sem precisar de renegociação.
     const video=pc.addTransceiver('video',{direction:'sendrecv'});
     const audio=pc.addTransceiver('audio',{direction:'sendrecv'});
     state.senders={video:video.sender,audio:audio.sender};
@@ -49,42 +51,91 @@
     pc.ontrack=e=>{
       if(!state.remoteStream)state.remoteStream=new MediaStream();
       if(!state.remoteStream.getTracks().some(track=>track.id===e.track.id))state.remoteStream.addTrack(e.track);
-      const video=$('remoteVideo');video.srcObject=state.remoteStream;
-      e.track.addEventListener('unmute',()=>{if(e.track.kind==='video'){updateRemote();video.play().catch(()=>{toast('Clique em Ativar áudio para reproduzir.');});}}, {once:false});
-      e.track.addEventListener('mute',()=>{if(e.track.kind==='video'&&!state.remoteLive)updateRemote();});
-      updateRemote();video.play().catch(()=>{});
+      const player=$('remoteVideo');player.srcObject=state.remoteStream;
+      e.track.addEventListener('unmute',()=>{if(e.track.kind==='video'){updateRemote();player.play().catch(()=>{});}});
+      e.track.addEventListener('mute',()=>{if(e.track.kind==='video')updateRemote();});
+      e.track.addEventListener('ended',()=>{if(e.track.kind==='video')updateRemote();});
+      updateRemote();player.play().catch(()=>{});
     };
+    // Quando os dois compartilham depois de entrarem, é essencial renegociar.
+    pc.onnegotiationneeded=()=>makeOffer().catch(e=>console.warn('Renegociação:',e));
     pc.onconnectionstatechange=()=>{
       if(pc!==state.pc)return;
-      const status=pc.connectionState;
-      if(status==='connected'){text('signalLabel','● Vídeo conectado');}
-      if(status==='failed'){text('signalLabel','● Falha WebRTC');toast('Conexão de vídeo falhou. Algumas redes exigem servidor TURN.');}
-      if(status==='disconnected'){text('signalLabel','● Reconectando vídeo...');}
+      if(pc.connectionState==='connected'){
+        state.iceRetries=0;clearTimeout(state.iceRetryTimer);
+        text('signalLabel','● Vídeo conectado');
+      }else if(pc.connectionState==='failed'){
+        text('signalLabel','● Falha no vídeo');
+        retryIce(pc);
+      }else if(pc.connectionState==='disconnected'){
+        text('signalLabel','● Tentando reconectar...');
+        clearTimeout(state.iceRetryTimer);
+        state.iceRetryTimer=setTimeout(()=>{if(state.pc===pc&&pc.connectionState!=='connected')retryIce(pc);},4500);
+      }
     };
-    if(state.stream)attachTracks().catch(e=>console.warn(e));
-    // Eleição única elimina colisão de ofertas quando os dois entram juntos.
-    if(state.id < state.remoteId){
-      setTimeout(()=>{if(state.pc===pc)makeOffer().catch(console.warn);},80);
-    }
+    if(state.stream)attachTracks().catch(e=>console.warn('Mídia local:',e));
   }
-  async function attachTracks(){if(!state.senders)return;const stream=state.stream;await state.senders.video.replaceTrack(stream?.getVideoTracks()[0]||null);await state.senders.audio.replaceTrack(stream?.getAudioTracks()[0]||null);await applyBitrate();}
+  async function attachTracks(){
+    if(!state.senders)return;
+    const stream=state.stream;
+    await state.senders.video.replaceTrack(stream?.getVideoTracks()[0]||null);
+    await state.senders.audio.replaceTrack(stream?.getAudioTracks()[0]||null);
+    if(stream)await applyBitrate();
+  }
   async function makeOffer(){
-    const pc=state.pc;if(!pc||state.makingOffer||pc.signalingState!=='stable')return;
+    const pc=state.pc;
+    if(!pc||pc.signalingState==='closed')return;
+    // As ofertas pendentes são enviadas assim que a negociação atual terminar.
+    if(state.makingOffer||pc.signalingState!=='stable'||state.isSettingRemoteAnswerPending){state.needsNegotiation=true;return;}
     state.makingOffer=true;
-    try{await pc.setLocalDescription(await pc.createOffer());await signal({type:'offer',description:{type:pc.localDescription.type,sdp:pc.localDescription.sdp}});}finally{state.makingOffer=false;}
+    try{
+      await pc.setLocalDescription(await pc.createOffer());
+      // Se o navegador recuou uma oferta simultânea, não envie um SDP antigo.
+      if(pc!==state.pc||pc.signalingState!=='have-local-offer')return;
+      const description={type:'offer',sdp:pc.localDescription.sdp};
+      await signal({type:'offer',description});
+    }finally{state.makingOffer=false;}
+  }
+  function flushOffer(){
+    if(!state.needsNegotiation)return;
+    state.needsNegotiation=false;
+    setTimeout(()=>makeOffer().catch(e=>console.warn('Oferta pendente:',e)),150);
+  }
+  async function retryIce(pc,manual=false){
+    if(pc!==state.pc||pc.signalingState==='closed')return;
+    if(!manual&&state.iceRetries>=2){
+      text('signalLabel','● Rede bloqueando vídeo — TURN pode ser necessário');
+      return;
+    }
+    state.iceRetries++;
+    try{pc.restartIce();await makeOffer();if(manual)toast('Reconectando os vídeos...');}
+    catch(e){console.warn('ICE restart:',e);if(manual)toast('Falha ao reconectar: '+e.message);}
   }
   async function acceptSignal(from,data){
     if(from!==state.remoteId)return;
-    if(data.type==='ice'){if(data.candidate)await addIce(data.candidate);return;}
+    if(data.type==='ice'){
+      if(data.candidate&&!state.ignoreOffer)await addIce(data.candidate);
+      return;
+    }
     ensurePeer();const pc=state.pc;if(!pc||!data.description)return;
     if(data.type==='offer'){
-      // Somente o ID menor envia ofertas. Se uma sessão reconecta, reconstrói-se o peer.
-      if(state.id < from)return;
-      await pc.setRemoteDescription(data.description);state.remoteHasDescription=true;await flushIce();
-      await pc.setLocalDescription(await pc.createAnswer());await signal({type:'answer',description:{type:pc.localDescription.type,sdp:pc.localDescription.sdp}});
+      const collision=state.makingOffer||pc.signalingState!=='stable';
+      state.ignoreOffer=!state.polite&&collision;
+      if(state.ignoreOffer)return;
+      // setRemoteDescription faz rollback automático em ofertas simultâneas.
+      await pc.setRemoteDescription(data.description);
+      state.ignoreOffer=false;
+      state.remoteHasDescription=true;await flushIce();
+      await pc.setLocalDescription(await pc.createAnswer());
+      await signal({type:'answer',description:{type:pc.localDescription.type,sdp:pc.localDescription.sdp}});
+      flushOffer();
     }else if(data.type==='answer'){
+      state.ignoreOffer=false;
       if(pc.signalingState!=='have-local-offer')return;
-      await pc.setRemoteDescription(data.description);state.remoteHasDescription=true;await flushIce();
+      state.isSettingRemoteAnswerPending=true;
+      try{await pc.setRemoteDescription(data.description);state.remoteHasDescription=true;await flushIce();}
+      finally{state.isSettingRemoteAnswerPending=false;}
+      flushOffer();
     }
   }
   async function startScreen(){
@@ -100,6 +151,7 @@
       $('localVideo').srcObject=stream;presentLocal(true);
       await $('localVideo').play().catch(()=>{});
       await attachTracks();
+      await makeOffer();
       setLocalLive(true);show('startBtn',false);show('stopBtn',true);
       text('qualityTag',`${height}P · ${fps} FPS`);text('resolutionOverlay',`${height}p / ${fps} FPS`);
       text('localHint','Compartilhando sua tela');
@@ -112,7 +164,7 @@
     const stream=state.stream;if(!stream)return;state.stream=null;
     clearInterval(statsTimer);
     for(const track of stream.getTracks())try{track.stop();}catch{}
-    try{await attachTracks();}catch{}
+    try{await attachTracks();await makeOffer();}catch{}
     $('localVideo').srcObject=null;presentLocal(false);setLocalLive(false);
     show('startBtn',true);show('stopBtn',false);text('qualityTag','PRONTA');text('localHint','Sua tela não está sendo enviada');text('statsLine','Pronto para transmitir');
     try{await send('live',{live:false});}catch{}
@@ -173,6 +225,16 @@
   $('startBtn').addEventListener('click',startScreen);$('stopBtn').addEventListener('click',stopScreen);
   $('chatForm').addEventListener('submit',async e=>{e.preventDefault();const inp=$('chatInput');const message=inp.value.trim();if(!message)return;try{await send('chat',{nickname:$('nickname').value||'Convidado',message});inp.value='';}catch(err){toast(err.message);}});
   $('remoteVideo').addEventListener('loadedmetadata',()=>{if(state.remoteLive){presentRemote(true);text('remoteTag','AO VIVO');show('audioBtn',true);}});
-  window.addEventListener('beforeunload',()=>{for(const t of state.stream?.getTracks()||[])t.stop();state.sse?.close();endPeer();});
+  // Controle de recuperação, caso o vídeo falhe em alguma das redes.
+  const retryBtn=document.createElement('button');retryBtn.className='btn-small';retryBtn.type='button';
+  retryBtn.textContent='↻ Reconectar vídeo';retryBtn.style.marginLeft='8px';
+  $('signalLabel').insertAdjacentElement('afterend',retryBtn);
+  retryBtn.addEventListener('click',async()=>{
+    if(!state.remoteId){toast('Aguarde seu amigo entrar na sala.');return;}
+    if(!state.pc)ensurePeer();
+    await retryIce(state.pc,true);
+  });
+  document.querySelector('.version').textContent='v3.1';
+  window.addEventListener('beforeunload' ,()=>{for(const t of state.stream?.getTracks()||[])t.stop();state.sse?.close();endPeer();});
   init();
 })();
